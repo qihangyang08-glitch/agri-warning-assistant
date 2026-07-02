@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>本地农业舆情与风险预警助手</title>
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://unpkg.com/element-plus/dist/index.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  </head>
+  <body>
+    <div id="app" v-cloak>
+      <section v-if="!isLoggedIn" class="login-screen">
+        <form class="login-card" autocomplete="off" @submit.prevent="login">
+          <div class="brand login-brand">
+            <div class="brand-mark">农</div>
+            <div>
+              <strong>农业预警助手</strong>
+              <span>Local Agri Monitor</span>
+            </div>
+          </div>
+          <h1>登录系统</h1>
+          <p>请输入演示账号进入农业舆情与风险预警平台。</p>
+          <label>
+            <span>用户名</span>
+            <input v-model="loginForm.username" autocomplete="off" placeholder="请输入用户名" />
+          </label>
+          <label>
+            <span>密码</span>
+            <input v-model="loginForm.password" type="password" autocomplete="new-password" placeholder="请输入密码" />
+          </label>
+          <button class="primary" :disabled="loading" type="submit">{{ loading ? '登录中' : '登录' }}</button>
+          <div v-if="loginError" class="login-error">{{ loginError }}</div>
+        </form>
+      </section>
+
+      <template v-else>
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">农</div>
+          <div>
+            <strong>农业预警助手</strong>
+            <span>Local Agri Monitor</span>
+          </div>
+        </div>
+        <button :class="{active: activeView === 'dashboard'}" @click="activeView = 'dashboard'">总览</button>
+        <button :class="{active: activeView === 'news'}" @click="activeView = 'news'">新闻</button>
+        <button :class="{active: activeView === 'warnings'}" @click="activeView = 'warnings'">预警</button>
+        <button :class="{active: activeView === 'prices'}" @click="activeView = 'prices'">价格</button>
+        <button :class="{active: activeView === 'import'}" @click="activeView = 'import'">导入</button>
+      </aside>
+
+      <main class="shell">
+        <header class="topbar">
+          <div>
+            <h1>{{ viewTitle }}</h1>
+            <p>{{ statusText }}</p>
+          </div>
+          <div class="actions">
+            <button class="secondary" @click="refreshAll">刷新</button>
+            <button class="primary" :disabled="loading" @click="crawlNews">{{ loading ? '更新中' : '立即更新新闻' }}</button>
+            <button class="secondary" @click="logout">退出</button>
+          </div>
+        </header>
+
+        <section v-if="error" class="notice">{{ error }}</section>
+
+        <section v-show="activeView === 'dashboard'" class="view">
+          <div class="metrics">
+            <article><span>新闻总数</span><strong>{{ overview.news_count || 0 }}</strong></article>
+            <article><span>今日新增</span><strong>{{ overview.today_news_count || 0 }}</strong></article>
+            <article><span>预警记录</span><strong>{{ overview.warning_count || 0 }}</strong></article>
+            <article><span>较高及高风险</span><strong>{{ overview.high_warning_count || 0 }}</strong></article>
+          </div>
+          <div class="grid two">
+            <div class="panel"><h2>新闻分类</h2><div id="categoryChart" class="chart"></div></div>
+            <div class="panel"><h2>价格趋势</h2><div id="priceChart" class="chart"></div></div>
+          </div>
+          <div class="grid two">
+            <div class="panel"><h2>热点关键词</h2><div id="hotwordChart" class="chart"></div></div>
+            <div class="panel">
+              <h2>最新预警</h2>
+              <div class="warning-list">
+                <article v-for="item in warnings.slice(0, 5)" :key="item.id">
+                  <span :class="['badge', levelClass(item.risk_level)]">{{ item.risk_level }}</span>
+                  <strong>{{ item.title }}</strong>
+                  <p>{{ item.reason }}</p>
+                </article>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section v-show="activeView === 'news'" class="view">
+          <div class="filters">
+            <input v-model="filters.keyword" placeholder="搜索标题、正文、关键词" @keyup.enter="loadNews" />
+            <select v-model="filters.category" @change="loadNews">
+              <option value="">全部分类</option>
+              <option v-for="item in categories" :key="item.name" :value="item.name">{{ item.name }}</option>
+            </select>
+            <input v-model="filters.region" placeholder="地区" @keyup.enter="loadNews" />
+            <button class="secondary" @click="loadNews">查询</button>
+          </div>
+          <div class="table">
+            <div class="row head news-row"><span>标题</span><span>分类</span><span>地区</span><span>媒体</span><span>来源</span></div>
+            <button class="row clickable" v-for="item in news" :key="item.id" @click="selectedNews = item">
+              <span>{{ item.title }}</span>
+              <span>{{ item.category }}</span>
+              <span>{{ item.region }}</span>
+              <span>{{ item.source }}</span>
+              <span class="url-cell">
+                <a v-if="item.url" :href="item.url" target="_blank" rel="noopener" @click.stop>{{ item.url }}</a>
+                <em v-else>暂无</em>
+              </span>
+            </button>
+          </div>
+          <div v-if="selectedNews" class="detail">
+            <h2>{{ selectedNews.title }}</h2>
+            <div class="meta">{{ selectedNews.source }} · {{ selectedNews.region }} · {{ selectedNews.publish_time }}</div>
+            <a v-if="selectedNews.url" class="source-link" :href="selectedNews.url" target="_blank" rel="noopener">查看原文链接</a>
+            <p>{{ selectedNews.summary }}</p>
+            <div class="chips"><span v-for="word in splitWords(selectedNews.keywords)" :key="word">{{ word }}</span></div>
+          </div>
+        </section>
+
+        <section v-show="activeView === 'warnings'" class="view">
+          <div class="filters">
+            <select v-model="warningFilters.risk_level" @change="loadWarnings">
+              <option value="">全部等级</option>
+              <option>低风险</option>
+              <option>中风险</option>
+              <option>较高风险</option>
+              <option>高风险</option>
+            </select>
+            <input v-model="warningFilters.region" placeholder="地区" @keyup.enter="loadWarnings" />
+            <input v-model="warningFilters.product" placeholder="农产品" @keyup.enter="loadWarnings" />
+            <button class="secondary" @click="loadWarnings">查询</button>
+          </div>
+          <div class="warning-list wide">
+            <article v-for="item in warnings" :key="item.id">
+              <span :class="['badge', levelClass(item.risk_level)]">{{ item.risk_level }} · {{ item.risk_score }}</span>
+              <strong>{{ item.title }}</strong>
+              <div class="meta">{{ item.risk_type }} · {{ item.region }} · {{ item.product }}</div>
+              <div class="score-parts">
+                <div class="score-part" v-for="part in scoreParts(item)" :key="part.key">
+                  <div class="score-label">
+                    <span>{{ part.name }}</span>
+                    <strong>{{ part.value }}</strong>
+                  </div>
+                  <div class="score-track">
+                    <i :class="{deduct: part.deduct}" :style="{width: scoreWidth(part.value, part.max)}"></i>
+                  </div>
+                </div>
+              </div>
+              <p>{{ item.reason }}</p>
+              <p class="suggestion">{{ item.suggestion }}</p>
+            </article>
+          </div>
+        </section>
+
+        <section v-show="activeView === 'prices'" class="view">
+          <div class="filters">
+            <input v-model="priceFilters.product_name" placeholder="农产品名称" @keyup.enter="loadPrices" />
+            <input v-model="priceFilters.region" placeholder="地区" @keyup.enter="loadPrices" />
+            <button class="secondary" @click="loadPrices">查询</button>
+          </div>
+          <div class="table prices">
+            <div class="row head"><span>农产品</span><span>价格</span><span>单位</span><span>地区</span><span>日期</span></div>
+            <div class="row" v-for="item in prices" :key="item.id">
+              <span>{{ item.product_name }}</span><span>{{ item.price }}</span><span>{{ item.unit }}</span><span>{{ item.region }}</span><span>{{ item.date }}</span>
+            </div>
+          </div>
+        </section>
+
+        <section v-show="activeView === 'import'" class="view">
+          <div class="panel import-panel">
+            <h2>新闻数据导入</h2>
+            <input type="file" accept=".csv,.xlsx,.xls" @change="onFileChange" />
+            <button class="primary" :disabled="!uploadFile" @click="uploadNews">解析文件</button>
+            <pre v-if="uploadResult">{{ uploadResult }}</pre>
+          </div>
+        </section>
+      </main>
+      </template>
+    </div>
+    <script src="./app.js"></script>
+  </body>
+</html>
